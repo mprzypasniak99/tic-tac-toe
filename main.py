@@ -22,34 +22,51 @@ class Loader:
         self._procImage = None
         self.contours = None
         self.__load_image(filename)
-        self.centers = None
         self.figures = None
+        self.games = None
+
+    def getproc(self):
+        return self._procImage
 
     def __load_image(self, filename):
         self.image = cv.imread(filename)
-        self._procImage = cv.cvtColor(self.image, cv.COLOR_BGR2GRAY)
-        if self.__determine_background() > 127:
-            self._procImage = 255 - self._procImage
-        ret, self._procImage = cv.threshold(self._procImage, 127, 255, cv.THRESH_BINARY)
+        self.image = cv.resize(self.image, (500, 500))
+        self.__preprocess()
         self.contours, hierarchy = cv.findContours(self._procImage, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
 
-    def calc_centers(self):
-        self.centers = np.zeros(
-            (len(self.contours), 2))  # inicjalizacja tablicy do obliczania środków ciężkości konturów
-        for i in range(len(self.contours)):
-            self.centers[i] = (
-                [sum(self.contours[i][:, 0, 0]) / len(self.contours[i]),
-                 sum(self.contours[i][:, 0, 1]) / len(self.contours[i])])
+    def __preprocess(self):
+        kernel = np.ones((4, 4), np.uint8)
+        self._procImage = cv.cvtColor(self.image, cv.COLOR_BGR2GRAY)
+        self._procImage = cv.bilateralFilter(self._procImage, 9, 5, 5)
+        self._procImage = cv.Canny(self._procImage, 20, 50)
+        self._procImage = cv.morphologyEx(self._procImage, cv.MORPH_CLOSE, kernel)
+        ret, self._procImage = cv.threshold(self._procImage, 127, 255, cv.THRESH_BINARY)
+
+    def __filter_figures(self):
+        i = 0
+        while i < len(self.figures):
+            if cv.contourArea(self.figures[i].convHull) < 100:
+               self.figures.pop(i)
+            else:
+                i += 1
 
     def create_figures(self):
         self.figures = []
         for i in range(len(self.contours)):
-            tmp = []
+
+            center = (
+                [sum(self.contours[i][:, 0, 0]) / len(self.contours[i]),
+                 sum(self.contours[i][:, 0, 1]) / len(self.contours[i])])
+            tmpRad = []
+
+            hull = cv.convexHull(self.contours[i])
+
             for j in range(len(self.contours[i])):
-                tmp.append(sqrt((self.contours[i][j, 0, 0] - self.centers[i][0]) ** 2 + (
-                            self.contours[i][j, 0, 1] - self.centers[i][1]) ** 2))
-            tmp = np.array(tmp)
-            self.figures.append(Figure(self.contours[i], Measures(tmp, std(tmp), mean(tmp))))
+                tmpRad.append(sqrt((self.contours[i][j, 0, 0] - center[0]) ** 2 + (
+                            self.contours[i][j, 0, 1] - center[1]) ** 2))
+            tmpRad = np.array(tmpRad)
+            self.figures.append(Figure(self.contours[i], center, hull, Measures(tmpRad, std(tmpRad), mean(tmpRad))))
+        self.__filter_figures()
 
     def __determine_background(self):
         tempDict = {}
@@ -99,8 +116,8 @@ class Loader:
             tMax1 = 0
             iMax1 = -1
 
-            for i in range(len(self.centers)):
-                if (minX < self.centers[i][0] < maxX) and (minY < self.centers[i][1] < maxY) and i not in classified:
+            for i in range(len(self.figures)):
+                if (minX < self.figures[i].center[0] < maxX) and (minY < self.figures[i].center[1] < maxY) and i not in classified:
                     within.append(i)
                     if self.figures[i].measure.avg > tMax1:
                         tMax1 = self.figures[i].measure.avg
@@ -117,7 +134,8 @@ class Loader:
 
             for i in within:
                 if self.figures[i].measure.avg > tMax1:
-                    tmpradius = sqrt((self.centers[iMax][0] - self.centers[i][0])**2 + (self.centers[iMax][1] - self.centers[i][1])**2)
+                    tmpradius = sqrt((self.figures[iMax].center[0] - self.figures[i].center[0])**2
+                                     + (self.figures[iMax].center[1] - self.figures[i].center[1])**2)
                     if tMin == -1 or tmpradius < tMin:
                         tMax1 = self.figures[i].measure.avg
                         iMax1 = i
@@ -137,6 +155,85 @@ class Loader:
                     self.figures[i].type = "krzyzyk"
                 classified.append(i)
 
+    def classify_figures2(self):
+        for i in range(len(self.figures)):
+            hull_area = cv.contourArea(self.figures[i].convHull)
+            con_area = cv.contourArea(self.figures[i].contour)
+            if con_area / hull_area < 0.5:
+                self.figures[i].type = 'krzyzyk'
+            else:
+                self.figures[i].type = 'kolko'
+
+    def find_games(self):
+        self.games = []
+        assigned = []
+        while len(assigned) < len(self.figures):
+            maxi = 0
+            while maxi in assigned:
+                maxi += 1
+            for i in range(len(self.figures)):
+                if (self.figures[i].measure.avg > self.figures[maxi].measure.avg and i not in assigned and
+                        self.figures[i].type == 'krzyzyk'):
+                    maxi = i
+            assigned.append(maxi)
+
+            maxx = 0
+            maxy = 0
+            minx = self.figures[maxi].contour[0, 0, 0]
+            miny = self.figures[maxi].contour[0, 0, 1]
+
+            for vert in self.figures[maxi].contour:
+                if vert[0, 1] > maxy:
+                    maxy = vert[0, 1]
+                if vert[0, 1] < miny:
+                    miny = vert[0, 1]
+                if vert[0, 0] > maxx:
+                    maxx = vert[0, 0]
+                if vert[0, 0] < minx:
+                    minx = vert[0, 0]
+
+            within = []
+
+            for i in range(len(self.figures)):
+                if (minx < self.figures[i].center[0] < maxx and miny < self.figures[i].center[1] < maxy and
+                        i not in assigned):
+                    within.append(i)
+                    assigned.append(i)
+            if len(within) != 0:
+                self.games.append(Game([(maxx, maxy), (minx, miny)], within))
+
+    def classify_games(self):
+        for game in self.games:
+            len_x = abs(game.border[0][0] - game.border[1][0]) // 3 # długość x jednego pola
+            len_y = abs(game.border[0][1] - game.border[1][1]) // 3 # długość y jednego pola
+            for i in range(1, 10):
+                lx = game.border[1][0] + len_x * ((i - 1) % 3) # lewa granica pola
+                rx = game.border[1][0] + len_x * (i % 3) # prawa granica pola
+                dy = game.border[1][1] + len_y * ((i - 1) // 3) # górna granica pola
+                uy = game.border[1][1] + len_y * ((i + 2) // 3) # dolna granica pola
+
+                in_field = []
+                for j in game.figures:
+                    for vert in self.figures[j].contour:
+                        if lx < vert[0, 0] < rx and dy < vert[0, 1] < uy:
+                            in_field.append(j)
+                            break
+
+                if len(in_field) == 0:
+                    self.image = cv.putText(self.image, '-', (lx + int(0.5*len_x), uy - int(0.5 * len_y)),
+                                            cv.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 3)
+                else:
+                    maxi = in_field[0]
+                    for k in in_field:
+                        if self.figures[k].measure.avg > self.figures[maxi].measure.avg:
+                            maxi = k
+                    if self.figures[maxi].type == 'kolko':
+                        self.image = cv.putText(self.image, 'O', (lx + int(0.5*len_x), uy - int(0.5 * len_y)),
+                                                cv.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 3)
+                    else:
+                        self.image = cv.putText(self.image, 'X', (lx + int(0.5*len_x), uy - int(0.5 * len_y)),
+                                                cv.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 3)
+
 
 class Measures:
     def __init__(self, r, st, av):
@@ -146,61 +243,31 @@ class Measures:
 
 
 class Figure:
-    def __init__(self, con, meas):
+    def __init__(self, con, cen, hull, meas):
         self.contour = con
+        self.center = cen
+        self.convHull = hull
         self.measure = meas
         self.type = None
 
 
-test = Loader('4.jpg')
-test.calc_centers()
+class Game:
+    def __init__(self, border, fig):
+        self.border = border  #punkty określające granice planszy
+        self.figures = fig  #indeksy figur w klasie "Loader"
+
+
+test = Loader('3.jpg')
 test.create_figures()
-test.classify_figures()
+#test.classify_figures()
+test.classify_figures2()
+test.find_games()
+test.classify_games()
 
-plansza = io.imread('2.png', as_gray=True)  # ez wczytywanie
-plansza = filters.sobel(plansza)
-
-contours = measure.find_contours(plansza, 0)  # pyk kontury
 
 fig, ax = plt.subplots()
 ax.imshow(test.image, cmap=plt.cm.gray)
 
-center = np.zeros((len(contours), 2))  # inicjalizacja tablicy do obliczania środków ciężkości konturów
-# types = []
-
-for i in range(len(contours)):
-    center[i] = ([sum(contours[i][:, 1]) / len(contours[i]), sum(contours[i][:, 0]) / len(contours[i])])
-
-delete = []  # lista konturów do usunięcia
-
-for i in range(len(contours)):
-    for j in range(0, i):
-        if all(abs(center[j] - center[i]) <= (5, 5)):  # usuwamy kontury, których środki znajdują się zbyt blisko siebie
-            delete.append(i)
-            break
-ct1 = []
-cen1 = []
-for i in range(len(center)):  # przepisanie list po usunięciu nadmiarowych konturów
-    if i not in delete:
-        ct1.append(contours[i])
-        cen1.append(center[i])
-
-contours = ct1
-center = cen1
-
-radius = []
-
-figures = []
-
-for i in range(len(contours)):
-    tmp = []
-    for j in range(len(contours[i])):
-        tmp.append(sqrt((contours[i][j, 1] - center[i][0]) ** 2 + (contours[i][j, 0] - center[i][1]) ** 2))
-    radius.append(tmp)
-
-for i in range(len(radius)):
-    tmp = np.array(radius[i])
-    figures.append(Figure(contours[i], Measures(tmp, std(tmp), mean(tmp))))
 col = 'r'
 for i in range(0, len(test.figures)):  # rysowanie
     if test.figures[i].type == 'plansza':
@@ -211,7 +278,28 @@ for i in range(0, len(test.figures)):  # rysowanie
         col = 'b'
     else:
         col = 'y'
-    ax.plot(test.figures[i].contour[:,0, 0], test.figures[i].contour[:,0, 1], linewidth=2, color=col)
-    ax.plot(test.centers[i][0], test.centers[i][1], 'r+')
+    ax.plot(test.figures[i].contour[:, 0, 0], test.figures[i].contour[:, 0, 1], linewidth=2, color=col)
+    #ax.plot(test.figures[i].convHull[:, 0, 0], test.figures[i].convHull[:, 0, 1], linewidth=1, color='m')
+    ax.plot(test.figures[i].center[0], test.figures[i].center[1], 'r+')
+
+im = test.getproc()
+im2 = np.copy(im)
+im = cv.cvtColor(im, cv.COLOR_GRAY2BGR)
+
+linesP = cv.HoughLinesP(im2, 1, np.pi / 180, 50, None, 50, 10)
+if linesP is not None:
+    for i in range(0, len(linesP)):
+        l = linesP[i][0]
+        cv.line(im, (l[0], l[1]), (l[2], l[3]), (0, 0, 255), 3, cv.LINE_AA)
+
+#for i in range(len(test.contours)):
+ #   im = cv.drawContours(im, test.contours, i, (255, 0, 0), 3)
+
+for i in range(len(test.games)):
+    im2 = cv.rectangle(im, test.games[i].border[0], test.games[i].border[1], (0, 255, 0), 2)
+
+cv.imshow('window', im)
+cv.imwrite('test3.png', im2)
+cv.waitKey(0)
 
 plt.savefig("test1.png")
