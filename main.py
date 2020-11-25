@@ -50,6 +50,15 @@ class Loader:
             else:
                 i += 1
 
+    def __find_lines(self):
+        linesP = cv.HoughLinesP(self._procImage, 1, np.pi / 240, 50, None, 60, 15)
+        lines = []
+        if len(linesP != 0):
+            for i in range(len(linesP)):
+                l = linesP[i]
+                lines.append(Line([(l[0][0], l[0][1]), (l[0][2], l[0][3])]))
+        return lines
+
     def create_figures(self):
         self.figures = []
         for i in range(len(self.contours)):
@@ -167,6 +176,8 @@ class Loader:
     def find_games(self):
         self.games = []
         assigned = []
+        lines = self.__find_lines()
+
         while len(assigned) < len(self.figures):
             maxi = 0
             while maxi in assigned:
@@ -193,24 +204,38 @@ class Loader:
                     minx = vert[0, 0]
 
             within = []
-
+            lines_within = []
             for i in range(len(self.figures)):
                 if (minx < self.figures[i].center[0] < maxx and miny < self.figures[i].center[1] < maxy and
                         i not in assigned):
                     within.append(i)
                     assigned.append(i)
+
+            for i in range(len(lines)):
+                if ((minx < lines[i].points[0][0] < maxx and miny < lines[i].points[0][1] < maxy) and
+                        (minx < lines[i].points[0][0] < maxx and miny < lines[i].points[0][1] < maxy)):
+                    lines_within.append(lines[i])
+
             if len(within) != 0:
-                self.games.append(Game([(maxx, maxy), (minx, miny)], within))
+                self.games.append(Game([(maxx, maxy), (minx, miny)], within, lines_within))
+
+        #for g in self.games:
+         #   for l in g.lines:
+          #      cv.line(self.image, (l.points[0][0], l.points[0][1]),
+           #             (l.points[1][0], l.points[1][1]), (0, 0, 255), 3, cv.LINE_AA)
+
+       # cv.imshow('window', self.image)
+        #cv.waitKey(0)
 
     def classify_games(self):
         for game in self.games:
             len_x = abs(game.border[0][0] - game.border[1][0]) // 3 # długość x jednego pola
             len_y = abs(game.border[0][1] - game.border[1][1]) // 3 # długość y jednego pola
-            for i in range(1, 10):
-                lx = game.border[1][0] + len_x * ((i - 1) % 3) # lewa granica pola
-                rx = game.border[1][0] + len_x * (i % 3) # prawa granica pola
-                dy = game.border[1][1] + len_y * ((i - 1) // 3) # górna granica pola
-                uy = game.border[1][1] + len_y * ((i + 2) // 3) # dolna granica pola
+            for index in range(9):
+                lx = game.border[1][0] + len_x * (index % 3) # lewa granica pola
+                rx = game.border[1][0] + len_x * ((index % 3) + 1)  # prawa granica pola
+                dy = game.border[1][1] + len_y * (index // 3) # górna granica pola
+                uy = game.border[1][1] + len_y * ((index // 3) + 1) # dolna granica pola
 
                 in_field = []
                 for j in game.figures:
@@ -224,9 +249,9 @@ class Loader:
                                             cv.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 3)
                 else:
                     maxi = in_field[0]
-                    for k in in_field:
-                        if self.figures[k].measure.avg > self.figures[maxi].measure.avg:
-                            maxi = k
+                    for index in in_field:
+                        if self.figures[index].measure.avg > self.figures[maxi].measure.avg:
+                            maxi = index
                     if self.figures[maxi].type == 'kolko':
                         self.image = cv.putText(self.image, 'O', (lx + int(0.5*len_x), uy - int(0.5 * len_y)),
                                                 cv.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 3)
@@ -250,19 +275,79 @@ class Figure:
         self.measure = meas
         self.type = None
 
+class Line:
+    def __init__(self, points: list):
+        self.points = points
+        try:
+            self.dirx = (points[0][1] - points[1][1]) / (points[0][0] - points[1][0]) #y1-y2/x1-x2
+            self.addx = points[0][1] - self.dirx * points[0][0]
+            self.diry = None
+            self.addy = None
+        except ZeroDivisionError:
+            self.dirx = None
+            self.addx = None
+            self.diry = (points[0][0] - points[1][0]) / (points[0][1] - points[1][1])
+            self.addy = points[0][0] - self.diry * points[0][1]
+        self.len = sqrt((points[0][1] - points[1][1])**2 + (points[0][0] - points[1][0])**2)
+
 
 class Game:
-    def __init__(self, border, fig):
+    def __init__(self, border, fig, l: list):
         self.border = border  #punkty określające granice planszy
         self.figures = fig  #indeksy figur w klasie "Loader"
+        self.lines = l
+        self.__simplify_lines()
 
+    def __simplify_lines(self):
+        length = np.array([])
+        indexes = list(range(len(self.lines)))
+        for i in indexes:
+            j = i+1
+            while j < len(indexes):
+                pi = self.lines[i]
+                pj = self.lines[j]
+                to_del = -1
 
-test = Loader('3.jpg')
-test.create_figures()
-#test.classify_figures()
-test.classify_figures2()
-test.find_games()
-test.classify_games()
+                diffa = 5
+                diffb = 40
+
+                if (j != i and ((pi.dirx is not None and pj.dirx is not None and abs(pi.dirx - pj.dirx) < diffa
+                                 and abs(pi.addx - pj.addx) < diffb))):
+                    ind = [(0, 0), (1, 0), (1, 1), (0, 1)]
+                    dist = [sqrt((pi.points[i][0] - pj.points[j][0]) ** 2 + (pi.points[i][1] - pj.points[j][1]) ** 2)
+                            for i,j in ind]
+                    p1, p2 = ind[dist.index(max(dist))]
+
+                    self.lines[i] = Line([pi.points[p1], pj.points[p2]])
+                    to_del = j
+
+                if to_del != -1:
+                    self.lines.pop(to_del)
+                    indexes.pop()
+                else:
+                    j += 1
+            length = np.append(length, self.lines[i].len)
+        avg = np.mean(length)
+        i = 0
+        while i < len(self.lines):
+            if self.lines[i].len < avg:
+                self.lines.pop(i)
+            else:
+                i += 1
+#files = ["21", "23", "25", "26", "27", "29", "30", "32", "33", "34", "35", "36", "37"]
+files = ['3', '4']
+for f in files:
+    test = Loader("resources/"+f+".jpg")
+    test.create_figures()
+    test.classify_figures2()
+    test.find_games()
+    test.classify_games()
+
+    im = test.image
+    for i in range(len(test.games)):
+        im2 = cv.rectangle(im, test.games[i].border[0], test.games[i].border[1], (0, 255, 0), 2)
+
+    cv.imwrite('complete/'+f+'.png', im2)
 
 
 fig, ax = plt.subplots()
@@ -282,24 +367,16 @@ for i in range(0, len(test.figures)):  # rysowanie
     #ax.plot(test.figures[i].convHull[:, 0, 0], test.figures[i].convHull[:, 0, 1], linewidth=1, color='m')
     ax.plot(test.figures[i].center[0], test.figures[i].center[1], 'r+')
 
-im = test.getproc()
-im2 = np.copy(im)
-im = cv.cvtColor(im, cv.COLOR_GRAY2BGR)
+im = test.image
 
-linesP = cv.HoughLinesP(im2, 1, np.pi / 180, 50, None, 50, 10)
-if linesP is not None:
-    for i in range(0, len(linesP)):
-        l = linesP[i][0]
-        cv.line(im, (l[0], l[1]), (l[2], l[3]), (0, 0, 255), 3, cv.LINE_AA)
 
 #for i in range(len(test.contours)):
  #   im = cv.drawContours(im, test.contours, i, (255, 0, 0), 3)
 
-for i in range(len(test.games)):
-    im2 = cv.rectangle(im, test.games[i].border[0], test.games[i].border[1], (0, 255, 0), 2)
+
 
 cv.imshow('window', im)
-cv.imwrite('test3.png', im2)
+
 cv.waitKey(0)
 
 plt.savefig("test1.png")
