@@ -162,10 +162,10 @@ class Loader:
             minx = min(self.convex_hulls[ind][:, 0, 0])
             miny = min(self.convex_hulls[ind][:, 0, 1])
 
-            maxx = maxx + handicap if maxx + handicap < len(self.image) else maxx
-            maxy = maxy + handicap if maxy + handicap < len(self.image) else maxy
-            minx = minx - handicap if minx - handicap < len(self.image) else minx
-            miny = miny - handicap if miny - handicap < len(self.image) else miny
+            maxx = maxx + handicap if maxx + handicap <= len(self.image) else len(self.image)
+            maxy = maxy + handicap if maxy + handicap <= len(self.image) else len(self.image)
+            minx = minx - handicap if minx - handicap >= 0 else 0
+            miny = miny - handicap if miny - handicap <= 0 else 0
 
 
             assigned.append(ind)
