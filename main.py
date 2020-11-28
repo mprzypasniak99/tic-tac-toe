@@ -21,22 +21,168 @@ class Loader:
         self.image = None  # field for storing raw loaded image
         self._procImage = None  # private field storing image prepared for analysis
         self.contours = None  # array storing contours found in image
+        self.hierarchy = None  # matrix storing hierarchy of contours: [previous, next, first_child, parent] By Borubasz
+        self.convex_hulls = None  # convex hulls of contours By Borubasz
         self.__load_image(filename)  # execute method loading image, preprocess it and find contours
+        self.__get_convex_hulls()  # By Borubasz
+        self.__filter_contours()  # delete small contours from the array
         self.figures = None  # array storing Figure objects created in the image
         self.games = None  # array storing Game objects found in the image
 
     def getproc(self):  # return preprocessed image - used for debugging
         return self._procImage
 
-    def __load_image(self, filename):  # method for loading image and gettting contours out of it
+    def __load_image(self, filename):  # method for loading image and getting contours out of it
         self.image = cv.imread(filename)
         self.image = cv.resize(self.image, (500, 500))
         # resize image - gives better results when smaller image is used in preprocessing
 
         self.__preprocess()  # prepare image for analysis
 
-        self.contours, hierarchy = cv.findContours(self._procImage, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+        self.contours, self.hierarchy = cv.findContours(self._procImage, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
         # get contours out of the image
+
+    def __get_convex_hulls(self):  # By Borubasz
+        self.convex_hulls = []
+        for i in self.contours:
+            self.convex_hulls.append(cv.convexHull(i))
+
+    def __detect_lines(self, image, secImage):  # By Borubasz
+        lines = cv.HoughLines(image, 2, np.pi / 180, 50, None, 50, 10)
+        strong_lines = []
+        maxy, maxx = image.shape[:2]
+        avg = (maxy+maxx)/2
+        for i in lines:  # recalculating parameters for lines that have negative rho
+            if i[0][0] < 0:
+                i[0][0] *= -1.0
+                i[0][1] -= np.pi
+
+        for i in lines:  # finding four strong (that means they have the most points) and different lines
+            chk = 0
+            if len(strong_lines) == 0:
+                strong_lines.append(i)
+                continue
+            for j in strong_lines:
+                if (j[0][0] - 0.2*avg <= i[0][0] <= j[0][0] + 0.2*avg) and (
+                        j[0][1] - np.pi / 18 <= i[0][1] <= j[0][1] + np.pi / 18):
+                    chk += 1
+            if chk == 0 and len(strong_lines) < 4:
+                strong_lines.append(i)
+
+        if strong_lines is not None:  # this fragment of code draw those strong lines
+            for i in range(0, len(strong_lines)):
+                rho = strong_lines[i][0][0]
+                theta = strong_lines[i][0][1]
+                a = math.cos(theta)
+                b = math.sin(theta)
+                x0 = a * rho
+                y0 = b * rho
+                pt1 = (int(x0 + 1000 * (-b)), int(y0 + 1000 * a))
+                pt2 = (int(x0 - 1000 * (-b)), int(y0 - 1000 * a))
+                cv.line(secImage, pt1, pt2, (0, 0, 255), 1, cv.LINE_AA)
+        cv.imshow('window', secImage)
+        cv.waitKey(0)
+        cv.destroyAllWindows()
+        # let's calculate line equations
+        lines_eq = []  # structure will look like this: [a, b, c]
+        for i in range(0, len(strong_lines)):
+            rho = strong_lines[i][0][0]
+            theta = strong_lines[i][0][1]
+            try:
+                a = -1*math.cos(theta) / math.sin(theta)
+                b = rho / math.sin(theta)
+                c = -inf
+            except ZeroDivisionError:
+                a = -inf
+                b = -inf
+                c = rho
+            lines_eq.append([a, b, c])
+
+        lines_eq.sort(key=lambda x: -inf if x[0] == -inf else abs(x[0]))
+        print(lines_eq)
+        return lines_eq
+
+    def __handle_game(self, minx: int, miny: int, maxx: int, maxy: int):  # By Borubasz
+        game = self._procImage[miny:maxy, minx:maxx]  # cutting out founded field
+        tmpGame = self.image[miny:maxy, minx:maxx]  # cutting out founded field
+        print(minx, ' ', maxx, ' ', miny, ' ', maxy)
+        cv.imshow('window', tmpGame)
+        cv.waitKey(0)
+        cv.destroyAllWindows()
+        lines_eq = self.__detect_lines(game, tmpGame)
+        if len(lines_eq) < 4:
+            return
+        points_of_interest = [[0, 0], [0, (maxx - minx)], [(maxy - miny), 0], [(maxy - miny), (maxx - minx)]]  # [y, x]
+        for i in range(2):
+            for j in range(2, 4):
+                if lines_eq[i][0] == -inf:
+                    x = lines_eq[i][2]
+                    y = lines_eq[j][0]*x+lines_eq[j][1]
+                else:
+                    x = (lines_eq[i][1] - lines_eq[j][1])/(lines_eq[i][0] - lines_eq[j][0])
+                    y = lines_eq[i][0]*x+lines_eq[i][1]
+                    print(i, ' ', j, ' ', x, ' ', y)
+                    points_of_interest.append([int(y), int(x)])
+        print(len(points_of_interest))
+        contours, hierarchy = cv.findContours(game, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+        convex_hulls = []
+        for i in contours:
+            convex_hulls.append(cv.convexHull(i))
+        for i in range(len(contours)):
+            if hierarchy[0, i, 2] == -1:
+                hull_area = cv.contourArea(convex_hulls[i])  # compute area of convex hull of the figure
+                con_area = cv.contourArea(contours[i])  # compute area of the contour of the figure
+                center = (int(sum(contours[i][:, 0, 0]) / len(contours[i])),
+                          int(sum(contours[i][:, 0, 1]) / len(contours[i])))
+                if con_area / hull_area > 0.5 and con_area > 0.001*(maxx-minx)*(maxy-miny):
+                    tmpGame = cv.putText(tmpGame, 'O', center, cv.FONT_HERSHEY_SIMPLEX,
+                                         1, (255, 0, 255), 3)
+                elif con_area / hull_area <= 0.5 and con_area > 0.001*(maxx-minx)*(maxy-miny):
+                    tmpGame = cv.putText(tmpGame, 'X', center, cv.FONT_HERSHEY_SIMPLEX,
+                                         1, (255, 0, 255), 3)
+        cv.imshow('window', tmpGame)
+        cv.waitKey(0)
+        cv.destroyAllWindows()
+
+    def find_game(self):  # By Borubasz: this little function finds contour with biggest convex hull
+        # if you would take a look at the photo with drawn convex hull you would find that convex hull pretty nicely
+        # outlines game field
+        assigned = []
+        while len(assigned) < len(self.convex_hulls):
+            ind = 0
+
+            handicap = 10
+            for i in range(1, len(self.convex_hulls)):
+                if (i not in assigned and
+                cv.contourArea(self.convex_hulls[ind]) < cv.contourArea(self.convex_hulls[i])):
+                    ind = i
+            # we take maxes and mins from hull to find rectangle including game
+            maxx = max(self.convex_hulls[ind][:, 0, 0])
+            maxy = max(self.convex_hulls[ind][:, 0, 1])
+            minx = min(self.convex_hulls[ind][:, 0, 0])
+            miny = min(self.convex_hulls[ind][:, 0, 1])
+
+            maxx = maxx + handicap if maxx + handicap < len(self.image) else maxx
+            maxy = maxy + handicap if maxy + handicap < len(self.image) else maxy
+            minx = minx - handicap if minx - handicap < len(self.image) else minx
+            miny = miny - handicap if miny - handicap < len(self.image) else miny
+
+
+            assigned.append(ind)
+            # we search for contours that are within found boundaries
+            within = []
+
+            for i in range(len(self.contours)):
+                # if point in contour of the figure is within game min and max coordinates, assign it to this game
+                if i not in assigned:
+                    for vert in self.contours[i]:
+                        if (minx < vert[0, 0] < maxx and miny < vert[0, 1] < maxy):
+                            within.append(i)
+                            assigned.append(i)
+                            break
+
+            if len(within) > 0:
+                self.__handle_game(minx, miny, maxx, maxy)
 
     def __preprocess(self):  # Pablo liczę na to że wiesz co tu się dzieje, bo to twoje w końcu
         kernel = np.ones((4, 4), np.uint8)
@@ -51,6 +197,15 @@ class Loader:
         while i < len(self.figures):  # iterate over all figures
             if cv.contourArea(self.figures[i].convHull) < 100:  # check if convex hull of the figure is big enough
                 self.figures.pop(i)  # delete figure if it's too small
+            else:
+                i += 1
+
+    def __filter_contours(self):  # filtering the contours - small ones are deleted
+        i = 0
+        while i < len(self.contours):  # iterate over all figures
+            if cv.contourArea(self.convex_hulls[i]) < 100:  # check if convex hull of the contour is big enough
+                self.contours.pop(i)  # delete contour if it's too small
+                self.convex_hulls.pop(i)
             else:
                 i += 1
 
@@ -79,7 +234,7 @@ class Loader:
                         self.contours[i][j, 0, 1] - center[1]) ** 2))  # distance to the center
             tmpRad = np.array(tmpRad)  # append the radius to the array
             self.figures.append(Figure(self.contours[i], center, hull,
-                                       Measures(tmpRad, np.std(tmpRad)[0], mean(tmpRad)[0])))
+                                       Measures(tmpRad, np.std(tmpRad), mean(tmpRad))))
             # create new figure from computed data and add it to the array in figures field
         self.__filter_figures()  # filter created figures - delete the ones that are too small
 
@@ -273,15 +428,16 @@ class Game:  # class for storing game data and objects
                 i += 1
 
 
-# files = ["21", "23", "25", "26", "27", "29", "30", "32", "33", "34", "35", "36", "37"]
-files = ['3', '4']
+files = ["21", "23", "25", "26", "27", "29", "30", "32", "33", "34", "35", "36", "37"]
+#files = ['3', '4']
 for f in files:
-    test = Loader("resources/" + f + ".jpg")
-    test.create_figures()
-    test.classify_figures()
-    test.find_games()
-    test.classify_games()
-
+    test = Loader("resources/SAM_06" + f + ".JPG")
+    #test.create_figures()
+    test.find_game()
+    #test.classify_figures()
+    #test.find_games()
+    #test.classify_games()
+'''
     im = test.image
     for i in range(len(test.games)):
         im2 = cv.rectangle(im, test.games[i].border[0], test.games[i].border[1], (0, 255, 0), 2)
@@ -311,4 +467,4 @@ cv.imshow('window', im)
 
 cv.waitKey(0)
 
-plt.savefig("test1.png")
+plt.savefig("test1.png")'''
