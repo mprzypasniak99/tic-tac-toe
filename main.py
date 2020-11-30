@@ -47,11 +47,13 @@ class Loader:
         for i in self.contours:
             self.convex_hulls.append(cv.convexHull(i))
 
-    def __detect_lines(self, image, secImage):  # By Borubasz
-        lines = cv.HoughLines(image, 2, np.pi / 180, 50, None, 50, 10)
+    def __detect_lines(self, image, secImage, type: int):  # By Borubasz
+        lines = cv.HoughLines(image, 1, np.pi / 180, 50, None, 0, 0)
         strong_lines = []
         maxy, maxx = image.shape[:2]
-        avg = (maxy+maxx)/2
+        avg = (maxy+maxx+20)/2
+        if lines is None:
+            return None
         for i in lines:  # recalculating parameters for lines that have negative rho
             if i[0][0] < 0:
                 i[0][0] *= -1.0
@@ -63,10 +65,10 @@ class Loader:
                 strong_lines.append(i)
                 continue
             for j in strong_lines:
-                if (j[0][0] - 0.2*avg <= i[0][0] <= j[0][0] + 0.2*avg) and (
+                if (j[0][0] - 0.15*avg <= i[0][0] <= j[0][0] + 0.15*avg) and (
                         j[0][1] - np.pi / 18 <= i[0][1] <= j[0][1] + np.pi / 18):
                     chk += 1
-            if chk == 0 and len(strong_lines) < 4:
+            if chk == 0 and len(strong_lines) < type:
                 strong_lines.append(i)
 
         if strong_lines is not None:  # this fragment of code draw those strong lines
@@ -102,19 +104,19 @@ class Loader:
         print(lines_eq)
         return lines_eq
 
-    def __handle_game(self, minx: int, miny: int, maxx: int, maxy: int):  # By Borubasz
+    def __handle_game(self, minx: int, miny: int, maxx: int, maxy: int, type: int):  # By Borubasz
         game = self._procImage[miny:maxy, minx:maxx]  # cutting out founded field
         tmpGame = self.image[miny:maxy, minx:maxx]  # cutting out founded field
         print(minx, ' ', maxx, ' ', miny, ' ', maxy)
         cv.imshow('window', tmpGame)
         cv.waitKey(0)
         cv.destroyAllWindows()
-        lines_eq = self.__detect_lines(game, tmpGame)
-        if len(lines_eq) < 4:
+        lines_eq = self.__detect_lines(game, tmpGame, type)
+        if lines_eq is None or len(lines_eq) < type:
             return
         points_of_interest = [[0, 0], [0, (maxx - minx)], [(maxy - miny), 0], [(maxy - miny), (maxx - minx)]]  # [y, x]
-        for i in range(2):
-            for j in range(2, 4):
+        for i in range(int(type/2)):
+            for j in range(int(type/2), type):
                 if lines_eq[i][0] == -inf:
                     x = lines_eq[i][2]
                     y = lines_eq[j][0]*x+lines_eq[j][1]
@@ -134,10 +136,10 @@ class Loader:
                 con_area = cv.contourArea(contours[i])  # compute area of the contour of the figure
                 center = (int(sum(contours[i][:, 0, 0]) / len(contours[i])),
                           int(sum(contours[i][:, 0, 1]) / len(contours[i])))
-                if con_area / hull_area > 0.5 and con_area > 0.001*(maxx-minx)*(maxy-miny):
+                if con_area > 0.001*(maxx-minx)*(maxy-miny) and con_area / hull_area > 0.5:
                     tmpGame = cv.putText(tmpGame, 'O', center, cv.FONT_HERSHEY_SIMPLEX,
                                          1, (255, 0, 255), 3)
-                elif con_area / hull_area <= 0.5 and con_area > 0.001*(maxx-minx)*(maxy-miny):
+                elif con_area > 0.001*(maxx-minx)*(maxy-miny) and con_area / hull_area <= 0.5:
                     tmpGame = cv.putText(tmpGame, 'X', center, cv.FONT_HERSHEY_SIMPLEX,
                                          1, (255, 0, 255), 3)
         cv.imshow('window', tmpGame)
@@ -156,6 +158,15 @@ class Loader:
                 if (i not in assigned and
                 cv.contourArea(self.convex_hulls[ind]) < cv.contourArea(self.convex_hulls[i])):
                     ind = i
+
+            hull_area = cv.contourArea(self.convex_hulls[ind])  # compute area of convex hull of the figure
+            con_area = cv.contourArea(self.contours[ind])  # compute area of the contour of the figure
+
+            if con_area / hull_area < 0.5:
+                type = 4
+            else:
+                type = 8
+
             # we take maxes and mins from hull to find rectangle including game
             maxx = max(self.convex_hulls[ind][:, 0, 0])
             maxy = max(self.convex_hulls[ind][:, 0, 1])
@@ -165,7 +176,7 @@ class Loader:
             maxx = maxx + handicap if maxx + handicap <= len(self.image) else len(self.image)
             maxy = maxy + handicap if maxy + handicap <= len(self.image) else len(self.image)
             minx = minx - handicap if minx - handicap >= 0 else 0
-            miny = miny - handicap if miny - handicap <= 0 else 0
+            miny = miny - handicap if miny - handicap >= 0 else 0
 
 
             assigned.append(ind)
@@ -176,13 +187,13 @@ class Loader:
                 # if point in contour of the figure is within game min and max coordinates, assign it to this game
                 if i not in assigned:
                     for vert in self.contours[i]:
-                        if (minx < vert[0, 0] < maxx and miny < vert[0, 1] < maxy):
+                        if (minx < vert[0, 1] < maxx and miny < vert[0, 0] < maxy):
                             within.append(i)
                             assigned.append(i)
                             break
 
             if len(within) > 0:
-                self.__handle_game(minx, miny, maxx, maxy)
+                self.__handle_game(minx, miny, maxx, maxy, type)
 
     def __preprocess(self):  # Pablo liczę na to że wiesz co tu się dzieje, bo to twoje w końcu
         kernel = np.ones((4, 4), np.uint8)
