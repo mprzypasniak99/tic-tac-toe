@@ -117,16 +117,16 @@ class Loader:
         else:
             points_of_interest = []
 
-        for i in range(int(type/2)):
-            for j in range(int(type/2), type):
-                if lines_eq[i][0] == -inf:
-                    x = lines_eq[i][2]
-                    y = lines_eq[j][0]*x+lines_eq[j][1]
-                else:
-                    x = (lines_eq[i][1] - lines_eq[j][1])/(lines_eq[i][0] - lines_eq[j][0])
-                    y = lines_eq[i][0]*x+lines_eq[i][1]
-                    print(i, ' ', j, ' ', x, ' ', y)
-                    points_of_interest.append([int(y), int(x)])
+        # for i in range(int(type/2)):
+        #     for j in range(int(type/2), type):
+        #         if lines_eq[i][0] == -inf:
+        #             x = lines_eq[i][2]
+        #             y = lines_eq[j][0]*x+lines_eq[j][1]
+        #         else:
+        #             x = (lines_eq[i][1] - lines_eq[j][1])/(lines_eq[i][0] - lines_eq[j][0])
+        #             y = lines_eq[i][0]*x+lines_eq[i][1]
+        #             print(i, ' ', j, ' ', x, ' ', y)
+        #             points_of_interest.append([int(y), int(x)])
         
         print("Punkty: ",  len(points_of_interest))
 
@@ -206,10 +206,10 @@ class Loader:
                 b = self.__handle_game(minx_im, miny_im, maxx_im, maxy_im, type)
                 if b is True:
                     cv.rectangle(self.image, (minx, miny), (maxx, maxy), (125, 125, 0), 1)
-        cv.imwrite("obsluzone-zdjecie.jpg", self.image)
-        cv.imshow('window', self.image)
-        cv.waitKey(0)
-        cv.destroyAllWindows()
+        # cv.imwrite("obsluzone-zdjecie.jpg", self.image)
+        # cv.imshow('window', self.image)
+        # cv.waitKey(0)
+        # cv.destroyAllWindows()
 
     def __preprocess(self):  # Pablo liczę na to że wiesz co tu się dzieje, bo to twoje w końcu
         kernel = np.ones((4, 4), np.uint8)
@@ -229,9 +229,25 @@ class Loader:
                 i += 1
 
 
-#files = ["21", "23", "25", "26", "27", "29", "30", "32", "33", "34", "35", "36", "37"]
-#files = ['3', '4']
-files = ['32']
-for f in files:
+latwe = ["23", "32", "35", "36", "37", "39", "73", "74", "76", "77", "78", "80", "82", "83", "84"]
+srednie = ["21", "27", "29", "33", "43", "46", "50", "52", "55", "72"]
+trudne = ["25", "57", "59", "61", "63", "65", "67", "69", "71"]
+test = Loader("resources/Średnie/SAM_06" + "52" + ".JPG")
+test.find_game()
+for f in latwe:
     test = Loader("resources/Łatwe/SAM_06" + f + ".JPG")
     test.find_game()
+    im = test.image
+    cv.imwrite("complete/latwe/"+f+".png", im)
+
+for f in srednie:
+    test = Loader("resources/Średnie/SAM_06" + f + ".JPG")
+    test.find_game()
+    im = test.image
+    cv.imwrite("complete/srednie/"+f+".png", im)
+
+for f in trudne:
+    test = Loader("resources/Trudne/SAM_06" + f + ".JPG")
+    test.find_game()
+    im = test.image
+    cv.imwrite("complete/trudne/"+f+".png", im)
